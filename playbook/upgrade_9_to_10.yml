@@ -148,6 +148,6 @@
         path: "{{ item }}"
         state: absent
       loop:
-        - /var/log/leapp
+        #- /var/log/leapp
         - /var/lib/leapp
         - /etc/leapp

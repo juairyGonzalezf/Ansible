@@ -1,1 +1,18 @@
 fatal: Updating an unborn branch with changes added to the index.
+fatal: bad revision 'HEAD'
+Author identity unknown
+
+*** Please tell me who you are.
+
+Run
+
+  git config --global user.email "you@example.com"
+  git config --global user.name "Your Name"
+
+to set your account's default identity.
+Omit --global to set the identity only in this repository.
+
+fatal: empty ident name (for <ansible@server6.kratos150.local>) not allowed
+fatal: invalid refspec '/etc/ansible'
+error: cannot pull with rebase: You have unstaged changes.
+error: Please commit or stash them.
