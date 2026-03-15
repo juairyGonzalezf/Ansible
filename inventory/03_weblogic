@@ -1,0 +1,10 @@
+[weblogic:children]
+weblogic14_1_admin
+weblogic14_1_nodos
+
+[weblogic14_1_admin]
+server3
+
+[weblogic14_1_nodos]
+server4
+server5

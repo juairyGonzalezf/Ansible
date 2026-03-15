@@ -1,0 +1,129 @@
+---
+- name: Actualización Mayor RHEL 8 -> RHEL 9
+  # Apuntamos a tu grupo específico del inventario
+  hosts: nodos_rh8
+  #  hosts: nodos_rh8, nodos_rh10, DNS, ADMIN
+  # Nos convertimos en root para tener permisos totales
+  become: yes
+  
+  tasks:
+    # ---------------------------------------------------------
+    # FASE 1: PREPARACIÓN E INSTALACIÓN DE LEAPP
+    # ---------------------------------------------------------
+    - name: 1.1 Instalar la herramienta Leapp para RHEL 8 a 9
+      dnf:
+        name: leapp-upgrade-el8toel9
+        state: present
+
+    # ---------------------------------------------------------
+    # FASE 2: SOLUCIÓN DE INHIBIDORES CONOCIDOS
+    # ---------------------------------------------------------
+    - name: 2.1 Eliminar enlaces rotos de systemd (Ej vdo.service)
+      file:
+        path: /etc/systemd/system/multi-user.target.wants/vdo.service
+        state: absent
+
+    - name: 2.2 Modificar sshd_config para permitir a Leapp actualizar (PermitRootLogin)
+      # Buscamos la línea exacta que empieza por PermitRootLogin yes y la sustituimos
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        # La Regex que hemos probado con grep:
+        regexp: '^PermitRootLogin[[:space:]]+yes.*$'
+        # La nueva línea exacta que requiere Leapp:
+        line: 'PermitRootLogin yes # allowed for leapp upgrade'
+        # Si por algún motivo la línea original no existe, que no la cree al final del archivo
+        # (Así evitamos romper el sshd_config si alguien lo había borrado)
+        state: present
+    
+    - name: 2.3 Quitar el cerrojo de version de Red Hat para ver RHEL 9
+      command: subscription-manager release --unset
+      ignore_errors: yes
+
+    - name: 2.4 Refrescar la conexion con los servidores de Red Hat
+      command: subscription-manager refresh
+
+    - name: 2.5 Limpiar la cache de paquetes vieja
+      command: dnf clean all
+
+    # ---------------------------------------------------------
+    # FASE 2.5: SIMULACRO Y CONFIRMACIÓN MANUAL
+    # ---------------------------------------------------------
+    - name: 2.6 Ejecutar análisis previo (leapp preupgrade)
+      command: leapp preupgrade
+      # Evitamos que Ansible aborte aquí si Leapp encuentra inhibidores, 
+      # para poder llegar a la pausa y decidir nosotros.
+      failed_when: false
+      register: preupgrade_result
+
+    - name: 2.7 Mostrar resumen limpio de inhibidores por servidor
+      debug:
+        var: resumen_leapp
+      vars:
+        # 1. Al guardar la Regex aquí en comillas simples, YAML no da errores de sintaxis
+        regex_reporte: '={60}\n\s+REPORT OVERVIEW\s+\n={60}[\s\S]*?END OF REPORT OVERVIEW\s+\n={60}'
+        
+        # 2. Extraemos el bloque y usamos .split('\n') para convertirlo en una lista idéntica a stdout_lines
+        resumen_leapp: "{{ (preupgrade_result.stdout | regex_search(regex_reporte) | default('Reporte no encontrado', true)).split('\n') }}"
+
+    - name: 2.8 PAUSA - Confirmación manual del Sysadmin
+      # Este módulo pausa el playbook entero y te pregunta por consola.
+      pause:
+        prompt: "SIMULACRO COMPLETADO. ¿Deseas lanzar el leapp upgrade real a RHEL 9? (Escribe 'yes' para continuar, o presiona Enter para abortar)"
+      register: confirmacion_usuario
+      # 'run_once' hace que la pregunta salga solo 1 vez en tu consola, no 1 vez por servidor.
+      run_once: true
+
+    - name: 2.9 Abortar si no se escribió 'yes'
+      fail:
+        msg: "Actualización abortada por el usuario. Revisa los logs de Leapp en los servidores."
+      when: confirmacion_usuario.user_input | lower != 'yes'
+
+    # ---------------------------------------------------------
+    # FASE 3: EJECUCIÓN DE LA ACTUALIZACIÓN
+    # ---------------------------------------------------------
+    - name: 3.1 Lanzar el proceso 'leapp upgrade' (Esto tardará 10-20 minutos)
+      command: leapp upgrade
+      # Ansible puede agotarse si un comando no emite texto en mucho tiempo. 
+      # Le decimos que no se preocupe y que espere.
+      async: 3600
+      poll: 15
+
+    # ---------------------------------------------------------
+    # FASE 4: REINICIO Y ACTUALIZACIÓN OFFLINE
+    # ---------------------------------------------------------
+    - name: 4.1 Reiniciar para aplicar RHEL 9 (Esto tardará 15-30 minutos)
+      reboot:
+        msg: "Ansible ha iniciado el reinicio para actualizar a RHEL 9."
+        # Le damos a Ansible hasta 1 hora (3600 seg) para esperar a que el servidor vuelva
+        reboot_timeout: 3600
+
+    # ---------------------------------------------------------
+    # FASE 5: LIMPIEZA POST-ACTUALIZACIÓN
+    # ---------------------------------------------------------
+    - name: 5.1 Quitar el cerrojo de la versión en subscription-manager
+      command: subscription-manager release --unset
+      # Evitamos que falle si el cerrojo ya estaba quitado
+      ignore_errors: yes
+
+    - name: 5.2 Desinstalar el Leapp antiguo (Ignorando exclusiones de dnf)
+      command: dnf remove -y leapp leapp-upgrade-el8toel9 --disableexcludes=all
+
+    - name: 5.3 Limpiar las carpetas temporales y logs de Leapp
+      file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /var/log/leapp
+        - /var/lib/leapp
+        - /etc/leapp
+
+    - name: 5.4 Limpiar la caché del gestor de paquetes DNF
+      command: dnf clean all
+
+    - name: 5.5 Comprobación Final - Verificar la nueva versión del SO
+      command: cat /etc/redhat-release
+      register: version_os
+
+    - name: 5.6 Mostrar la nueva versión por pantalla
+      debug:
+        msg: "¡Éxito! El servidor ahora está en: {{ version_os.stdout }}"

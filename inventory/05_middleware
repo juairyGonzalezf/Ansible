@@ -1,0 +1,7 @@
+[middleware:children]
+weblogic
+ADMIN
+DNS
+BBDD
+nodos_rh10
+nodos_rh8

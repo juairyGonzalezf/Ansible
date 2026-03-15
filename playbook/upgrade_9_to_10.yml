@@ -1,0 +1,153 @@
+---
+- name: Actualización Mayor RHEL 9 -> RHEL 10
+  # Asegúrate de apuntar al grupo que ya está en RHEL 9
+  hosts: nodos_rh8
+  become: yes
+  
+  tasks:
+# ---------------------------------------------------------
+    # FASE 1: PREPARACIÓN E INSTALACIÓN DE LEAPP
+    # ---------------------------------------------------------
+    - name: 1.1 Instalar la herramienta Leapp para RHEL 9 a 10 (Ignorando bloqueos previos)
+      dnf:
+        name: leapp-upgrade-el9toel10
+        state: present
+        # Esta es la llave mágica que ignora el bloqueo residual de RHEL 9
+        disable_excludes: all
+        
+    # ---------------------------------------------------------
+    # FASE 2: SOLUCIÓN DE INHIBIDORES CONOCIDOS (RHEL 9)
+    # ---------------------------------------------------------
+    - name: 2.1 Migrar configuración de red antigua (ifcfg a keyfile)
+      # Esto es un requisito estricto para RHEL 10
+      command: nmcli connection migrate
+      ignore_errors: yes
+
+    - name: 2.2 Eliminar enlaces rotos de systemd (vdo.service)
+      file:
+        path: /etc/systemd/system/multi-user.target.wants/vdo.service
+        state: absent
+    
+    - name: 2.3 Quitar el cerrojo de version de Red Hat para ver RHEL 10
+      command: subscription-manager release --unset
+      ignore_errors: yes
+
+    - name: 2.4 Eliminar paquetes huérfanos de la migración anterior (RHEL 9)
+      dnf:
+        name: 
+          - leapp-deps-el9
+          - leapp-repository-deps-el9
+        state: absent
+    
+    - name: 2.X Eliminar el paquete legacy iptables (Origen de nft_compat)
+      # Al borrar el paquete evitamos que cualquier app vuelva a levantar el módulo
+      dnf:
+        name: iptables
+        state: absent
+
+    - name: 2.Y Expulsar definitivamente el módulo nft_compat de la RAM
+      # Aunque borremos el paquete, el kernel lo mantiene en memoria. Lo matamos aquí.
+      modprobe:
+        name: nft_compat
+        state: absent
+      ignore_errors: yes
+      
+    #- name: 2.5 Importar llaves GPG oficiales de Red Hat
+    #  rpm_key:
+    #    state: present
+    #    key: /etc/pki/rpm-gpg/RPM-GPG-KEY-redhat-release
+    #  ignore_errors: yes
+
+    - name: 2.6 Refrescar la conexion con los servidores de Red Hat
+      command: subscription-manager refresh
+
+    - name: 2.7 Limpiar la cache de paquetes vieja
+      command: dnf clean all
+
+    # ---------------------------------------------------------
+    # FASE 2.5: SIMULACRO Y CONFIRMACIÓN MANUAL
+    # ---------------------------------------------------------
+    - name: 2.8 Ejecutar análisis previo (leapp preupgrade)
+      command: leapp preupgrade
+      failed_when: false
+      register: preupgrade_result
+
+    - name: 2.9 Mostrar resumen limpio de inhibidores por servidor
+      debug:
+        var: resumen_leapp
+      vars:
+        regex_reporte: '={60}\n\s+REPORT OVERVIEW\s+\n={60}[\s\S]*?END OF REPORT OVERVIEW\s+\n={60}'
+        resumen_leapp: "{{ (preupgrade_result.stdout | regex_search(regex_reporte) | default('Reporte no encontrado', true)).split('\n') }}"
+
+    - name: 2.10 PAUSA - Confirmación manual del Sysadmin
+      pause:
+        prompt: "SIMULACRO COMPLETADO. ¿Deseas lanzar el leapp upgrade real a RHEL 10? (Escribe 'yes' para continuar, o presiona Enter para abortar)"
+      register: confirmacion_usuario
+      run_once: true
+
+    - name: 2.11 Abortar si no se escribió 'yes'
+      fail:
+        msg: "Actualización abortada por el usuario."
+      when: confirmacion_usuario.user_input | lower != 'yes'
+
+    # ---------------------------------------------------------
+    # FASE 3: EJECUCIÓN DE LA ACTUALIZACIÓN
+    # ---------------------------------------------------------
+    - name: 3.1 Lanzar el proceso 'leapp upgrade'
+      command: leapp upgrade
+      async: 3600
+      poll: 15
+    #- name: 3.1 Lanzar el proceso 'leapp upgrade'
+    #  # Quitamos --no-rhsm para que pueda descargar RHEL 10
+    #  command: leapp upgrade --nogpgcheck
+    #  async: 3600
+    #  poll: 15
+
+    # ---------------------------------------------------------
+    # FASE 4: REINICIO Y ACTUALIZACIÓN OFFLINE
+    # ---------------------------------------------------------
+    - name: 4.1 Reiniciar para aplicar RHEL 10 (Esto tardará 15-30 minutos)
+      reboot:
+        msg: "Ansible ha iniciado el reinicio para actualizar a RHEL 10."
+        reboot_timeout: 3600
+
+    # ---------------------------------------------------------
+    # FASE 5: LIMPIEZA POST-ACTUALIZACIÓN Y ZOMBIS
+    # ---------------------------------------------------------
+    - name: 5.1 Quitar el cerrojo de la versión en subscription-manager
+      command: subscription-manager release --unset
+      ignore_errors: yes
+
+    - name: 5.2 Forzar actualización final ignorando exclusiones de Leapp
+      command: dnf update -y --disableexcludes=all
+
+    - name: 5.3 Eliminar Kernels antiguos de RHEL 9
+      # Esto borra todos los kernels obsoletos y deja solo el actual de RHEL 10
+      command: dnf remove -y --oldinstallonly
+      ignore_errors: yes
+
+    - name: 5.4 Limpiar dependencias y paquetes zombis
+      command: dnf autoremove -y
+
+    - name: 5.5 Limpiar la caché del gestor de paquetes DNF
+      command: dnf clean all
+
+    - name: 5.6 Comprobación Final - Verificar la nueva versión del SO
+      command: cat /etc/redhat-release
+      register: version_os
+
+    - name: 5.7 Mostrar la nueva versión por pantalla
+      debug:
+        msg: "¡Éxito total! El servidor ahora está en: {{ version_os.stdout }}"
+
+    - name: 5.8 Desinstalar el Leapp antiguo (Versión 9to10)
+      command: dnf remove -y leapp leapp-upgrade-el9toel10 --disableexcludes=all
+
+    - name: 5.9 Limpiar las carpetas temporales y logs de Leapp
+      file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /var/log/leapp
+        - /var/lib/leapp
+        - /etc/leapp

@@ -1,0 +1,97 @@
+---
+- name: Resincronización y Limpieza de Suscripción Red Hat (Fix Snapshot)
+  # Ponemos 'all' para que puedas pasárselo a cualquier servidor que falle, 
+  # o cámbialo a 'nodos_rh8' si solo quieres aplicarlo a ese grupo.
+  #hosts: all
+  #hosts: nodos_rh8, nodos_rh10, DNS, ADMIN
+  hosts: nodos_rh8
+  become: yes
+
+  # 1. Cargamos el baúl de contraseñas
+  vars_files:
+    - /etc/ansible/secretos.yml
+
+  tasks:
+    # ---------------------------------------------------------
+    # PASO 1: TIEMPO Y SINCRONIZACIÓN
+    # ---------------------------------------------------------
+    - name: 1.1 Reiniciar el servicio de reloj (chronyd)
+      systemd:
+        name: chronyd
+        state: restarted
+
+    - name: 1.2 Forzar sincronización inmediata (makestep)
+      command: chronyc makestep
+      # Ponemos ignore_errors por si el reloj ya está perfecto y chronyc devuelve error
+      ignore_errors: yes
+
+    - name: 1.3 Mostrar la hora actual corregida
+      command: date
+      register: hora_actual
+
+    - name: 1.4 Imprimir la hora en pantalla
+      debug:
+        msg: "La hora del servidor ahora es: {{ hora_actual.stdout }}"
+
+    # ---------------------------------------------------------
+    # PASO 2 Y 3: AMNESIA DE RED HAT Y LIMPIEZA DNF
+    # ---------------------------------------------------------
+    - name: 2.1 Borrar la identidad corrupta de Red Hat (Clean)
+      command: subscription-manager clean
+
+    #- name: 3.1 Destruir la caché residual de DNF a la fuerza
+    #  # Usamos 'shell' en lugar de 'command' porque el asterisco (*) 
+    #  # necesita que la consola lo interprete
+    #  shell: rm -rf /var/cache/dnf/*
+    #  args:
+    #    warn: false
+
+    # ---------------------------------------------------------
+    # PASO 4: RE-REGISTRO SEGURO (MÉTODO COMPATIBLE CON PYTHON 3.6)            | 
+    # ---------------------------------------------------------                V
+    - name: 4.1 Volver a registrar la máquina en Red Hat (Compatible RHEL 8)
+      command: subscription-manager register --username="juairy111" --password="{{ rh_password }}" --force
+      # MUY IMPORTANTE: Esto evita que la contraseña se muestre en consola o se guarde en los logs
+      no_log: true
+  
+    # ---------------------------------------------------------
+    # PASO 5: LA PRUEBA DE FUEGO
+    # ---------------------------------------------------------
+    - name: 5.1 Refrescar el estado de la suscripción
+      command: subscription-manager refresh
+
+    - name: 5.2 Limpiar caché oficial de DNF
+      command: dnf clean all
+
+    - name: 5.3 Comprobar si Leapp está disponible
+      command: dnf search leapp-upgrade
+      register: busqueda_leapp
+      ignore_errors: yes
+
+    - name: 5.4 Mostrar resultado de la búsqueda
+      debug:
+        msg: "Resultado de DNF: {{ busqueda_leapp.stdout_lines }}"
+# ---------------------------------------------------------
+    # PASO 6: ACTIVACIÓN DE RED HAT INSIGHTS
+    # ---------------------------------------------------------
+    - name: 6.1 Asegurar que el paquete insights-client está instalado
+      dnf:
+        name: insights-client
+        state: present
+
+    - name: 6.2 Comprobar el estado actual de Insights
+      command: insights-client --status
+      register: estado_insights
+      ignore_errors: yes
+      changed_when: false
+
+    - name: 6.3 Registrar en Insights (Solo si no estaba activo)
+      command: insights-client --register
+      # Solo se ejecuta si el comando anterior dio error o dice que no está registrado
+      when: estado_insights.rc != 0 or 'NOT registered' in estado_insights.stdout
+      register: registro_insights
+
+    - name: 6.4 Confirmación de Insights
+      debug:
+        msg: "Insights ha sido activado y sincronizado con el nuevo certificado."
+      when: registro_insights.changed
