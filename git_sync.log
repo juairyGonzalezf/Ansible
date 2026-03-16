@@ -16,3 +16,12 @@ fatal: empty ident name (for <ansible@server6.kratos150.local>) not allowed
 fatal: invalid refspec '/etc/ansible'
 error: cannot pull with rebase: You have unstaged changes.
 error: Please commit or stash them.
+[etc/ansible 1658763] Auto-sync: 2026-03-15 20:41:51
+ 3 files changed, 20 insertions(+), 3 deletions(-)
+fatal: 'server6' does not appear to be a git repository
+fatal: Could not read from remote repository.
+
+Please make sure you have the correct access rights
+and the repository exists.
+error: cannot pull with rebase: You have unstaged changes.
+error: Please commit or stash them.
