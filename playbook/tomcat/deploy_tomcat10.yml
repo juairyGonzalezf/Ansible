@@ -1,0 +1,139 @@
+---
+- name: Undedeploy Tomcat 9 y Despliegue Centralizado de Tomcat 10
+  hosts: server7 # Cambia esto por tu grupo de servidores
+  become: yes
+  vars:
+    # 1. Rutas en el servidor local (Ansible)
+    # Pon aquí la ruta real donde tienes el .tar.gz en tu máquina Ansible
+    paquete_tomcat10_local: "/etc/ansible/playbook/tomcat/apache-tomcat-10.1.52.tar.gz"
+    
+    # 2. Rutas en los servidores destino
+    tomcat_base: "/opt/tomcat"
+    tomcat_home: "/opt/tomcat/apache-tomcat"
+    
+    # 3. Variables de Backup y Servicio
+    fecha_backup: "{{ ansible_date_time.date }}_{{ ansible_date_time.hour }}{{ ansible_date_time.minute }}"
+    dir_backup: "/opt/tomcat_backup_{{ fecha_backup }}"
+    tomcat_user: "tomcat" # Cambia si tu usuario es otro (ej. root)
+    tomcat_group: "tomcat"
+
+  tasks:
+    # ---------------------------------------------------------
+    # FASE 1: PARADA Y BACKUP DE TOMCAT 9
+    # ---------------------------------------------------------
+    - name: 1.1 Detener el servicio actual de Tomcat 9
+      systemd:
+        name: tomcat # Ajusta si tu servicio se llama distinto (ej. tomcat9)
+        state: stopped
+        enabled: no
+      ignore_errors: yes # Por si el servicio no existe o ya está parado
+
+    - name: 1.2 Crear directorio de backup
+      file:
+        path: "{{ dir_backup }}"
+        state: directory
+        mode: '0755'
+
+    - name: 1.3 Respaldar configuraciones, webapps y setenv.sh actuales
+      # Copiamos la carpeta entera para no perder nada
+      command: cp -r {{ tomcat_home }} {{ dir_backup }}/apache-tomcat-old
+      ignore_errors: yes
+
+    # ---------------------------------------------------------
+    # FASE 2: LIMPIEZA Y DESPLIEGUE CENTRALIZADO
+    # ---------------------------------------------------------
+    - name: 2.1 Eliminar el directorio del Tomcat 9 antiguo
+      file:
+        path: "{{ tomcat_home }}"
+        state: absent
+
+    - name: 2.2 Asegurar que el directorio base existe
+      file:
+        path: "{{ tomcat_base }}"
+        state: directory
+
+    - name: 2.3 Descomprimir Tomcat 10 desde Ansible a los servidores destino
+      # unarchive por defecto coge el archivo del servidor Ansible (src) 
+      # y lo manda a los destinos (dest)
+      unarchive:
+        src: "{{ paquete_tomcat10_local }}"
+        dest: "{{ tomcat_base }}"
+        owner: "{{ tomcat_user }}"
+        group: "{{ tomcat_group }}"
+        # Extra_opts quita la primera carpeta (ej. apache-tomcat-10.1.x) 
+        # para que podamos crear la carpeta exacta que tú quieres
+        extra_opts: [--strip-components=1]
+        # Creamos la carpeta destino al vuelo
+        remote_src: no 
+
+    - name: 2.4 Renombrar la carpeta extraída a la ruta oficial (apache-tomcat)
+      # Como usamos strip-components arriba, simplemente creamos la carpeta destino
+      # en el paso anterior y descomprimimos dentro. 
+      # Pero para asegurar la estructura, lo ajustamos:
+      file:
+        path: "{{ tomcat_home }}"
+        state: directory
+        owner: "{{ tomcat_user }}"
+        group: "{{ tomcat_group }}"
+        recurse: yes
+
+    # ---------------------------------------------------------
+    # FASE 3: RESTAURACIÓN DE CONFIGURACIONES Y SETENV
+    # ---------------------------------------------------------
+    - name: 3.1 Restaurar carpeta conf/ desde el backup
+      command: cp -rf {{ dir_backup }}/apache-tomcat-old/conf/* {{ tomcat_home }}/conf/
+      ignore_errors: yes
+
+    - name: 3.2 Crear y configurar el nuevo setenv.sh
+      # Usamos copy con content para asegurarnos de que el setenv.sh queda perfecto
+      copy:
+        dest: "{{ tomcat_home }}/bin/setenv.sh"
+        owner: "{{ tomcat_user }}"
+        group: "{{ tomcat_group }}"
+        mode: '0755'
+        content: |
+          #!/bin/bash
+          # Configuraciones de memoria y entorno para Tomcat 10
+          export CATALINA_OPTS="-Xms512M -Xmx1024M -server -XX:+UseParallelGC"
+          export JAVA_OPTS="-Djava.awt.headless=true -Djava.security.egd=file:/dev/./urandom"
+
+    # ---------------------------------------------------------
+    # FASE 4: CONFIGURACIÓN DEL SERVICIO Y ARRANQUE
+    # ---------------------------------------------------------
+    - name: 4.1 Configurar el servicio Systemd para Tomcat 10
+      copy:
+        dest: /etc/systemd/system/tomcat.service
+        content: |
+          [Unit]
+          Description=Apache Tomcat 10 Web Application Container
+          After=network.target
+
+          [Service]
+          Type=forking
+          User={{ tomcat_user }}
+          Group={{ tomcat_group }}
+
+          Environment="JAVA_HOME=/usr/lib/jvm/jre" # Ajusta a tu ruta de Java real
+          Environment="CATALINA_PID={{ tomcat_home }}/temp/tomcat.pid"
+          Environment="CATALINA_HOME={{ tomcat_home }}"
+          Environment="CATALINA_BASE={{ tomcat_home }}"
+
+          ExecStart={{ tomcat_home }}/bin/startup.sh
+          ExecStop={{ tomcat_home }}/bin/shutdown.sh
+
+          RestartSec=10
+          Restart=always
+
+          [Install]
+          WantedBy=multi-user.target
+
+    - name: 4.2 Recargar el demonio de Systemd y arrancar Tomcat 10
+      systemd:
+        daemon_reload: yes
+        name: tomcat
+        state: restarted
+        enabled: yes
+
+    - name: 4.3 Mostrar mensaje de éxito
+      debug:
+        msg: "Tomcat 10 desplegado en {{ tomcat_home }}. Backup guardado en {{ dir_backup }}"
