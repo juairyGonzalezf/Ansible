@@ -43,3 +43,14 @@ Please make sure you have the correct access rights
 and the repository exists.
 error: cannot pull with rebase: You have unstaged changes.
 error: Please commit or stash them.
+[etc/ansible 9631084] Auto-sync: 2026-03-16 20:00:01
+ 3 files changed, 148 insertions(+)
+ create mode 100644 playbook/tomcat/apache-tomcat-10.1.52.tar.gz
+ create mode 100644 playbook/tomcat/deploy_tomcat10.yml
+fatal: 'server6' does not appear to be a git repository
+fatal: Could not read from remote repository.
+
+Please make sure you have the correct access rights
+and the repository exists.
+error: cannot pull with rebase: You have unstaged changes.
+error: Please commit or stash them.
