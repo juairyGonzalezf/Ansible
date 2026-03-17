@@ -1,0 +1,108 @@
+---
+- name: Configurar Proxy Apache (HTTPD) para ORDS
+  hosts: server7 # Cambia al grupo de tus servidores
+  become: yes
+  vars:
+    # --- VARIABLES DE APACHE / ORDS ---
+    servicio_bbdd: "oraclepdb1" # ¡Cambia esto para cada nuevo ORDS!
+    dominio_cert: "kratos150.com" 
+    proxy_alias: "server6" # Opcional. Déjalo vacío ("") si no hay alias
+    
+    # --- VARIABLES DE BACKUP ---
+    # Incluimos los segundos (second) para garantizar que NUNCA se pisen los backups
+    fecha_backup: "{{ ansible_date_time.date }}_{{ ansible_date_time.hour }}{{ ansible_date_time.minute }}{{ ansible_date_time.second }}"
+
+  tasks:
+    # =========================================================
+    # FASE 1: INSTALACIÓN Y LIMPIEZA GENERAL
+    # =========================================================
+    - name: 1.1 Asegurar que httpd y mod_ssl están instalados
+      dnf:
+        name: 
+          - httpd
+          - mod_ssl
+        state: present
+
+    - name: 1.2 Anular la configuración por defecto de ssl.conf
+      command: mv /etc/httpd/conf.d/ssl.conf /etc/httpd/conf.d/ssl.conf.bak
+      args:
+        removes: /etc/httpd/conf.d/ssl.conf
+
+    # =========================================================
+    # FASE 2: BACKUP HISTÓRICO DE CONFIGURACIÓN (SI EXISTE)
+    # =========================================================
+    - name: 2.1 Comprobar si ya existe el archivo de configuración de {{ servicio_bbdd }}
+      stat:
+        path: "/etc/httpd/conf.d/{{ servicio_bbdd }}.conf"
+      register: config_httpd_actual
+
+    - name: 2.2 Hacer copia de seguridad de la configuración anterior (Ignorada por Apache)
+      # Importante: El archivo backup NO termina en .conf, termina en .backup_FECHA
+      command: cp -a /etc/httpd/conf.d/{{ servicio_bbdd }}.conf /etc/httpd/conf.d/{{ servicio_bbdd }}.conf.backup_{{ fecha_backup }}
+      when: config_httpd_actual.stat.exists
+
+    # =========================================================
+    # FASE 3: CREACIÓN DEL VIRTUALHOST
+    # =========================================================
+    - name: 3.1 Generar VirtualHost de Apache para {{ servicio_bbdd }}
+      copy:
+        dest: "/etc/httpd/conf.d/{{ servicio_bbdd }}.conf"
+        content: |
+          # Archivo: {{ servicio_bbdd }}.conf (Autogenerado por Ansible)
+          Listen 443 https
+          
+          <VirtualHost *:443>
+              ServerName {{ inventory_hostname }}
+              {% if proxy_alias != "" %}
+              ServerAlias {{ proxy_alias }}
+              {% endif %}
+
+
+              ProxyTimeout 180 
+              Timeout 180
+              
+              ErrorLog logs/ssl_error_log
+              TransferLog logs/ssl_access_log
+              LogLevel warn
+          
+              SSLEngine on
+              SSLHonorCipherOrder on
+              SSLCipherSuite PROFILE=SYSTEM
+              SSLProxyCipherSuite PROFILE=SYSTEM
+          
+              SSLCertificateFile /etc/httpd/conf/certificates/{{ inventory_hostname }}.{{ dominio_cert }}.crt
+              SSLCertificateKeyFile /etc/httpd/conf/certificates/{{ inventory_hostname }}.{{ dominio_cert }}.key
+          
+              <FilesMatch "\.(cgi|shtml|phtml|php)$">
+                  SSLOptions +StdEnvVars
+              </FilesMatch>
+          
+              BrowserMatch "MSIE [2-5]" \
+                       nokeepalive ssl-unclean-shutdown \
+                       downgrade-1.0 force-response-1.0
+          
+              CustomLog logs/ssl_request_log "%t %h %{SSL_PROTOCOL}x %{SSL_CIPHER}x \"%r\" %b"
+          
+              # --- LA CONEXIÓN CON TOMCAT ---
+              ProxyPreserveHost On
+          
+              ProxyPass /ords_{{ servicio_bbdd }} http://localhost:8080/ords_{{ servicio_bbdd }}
+              ProxyPassReverse /ords_{{ servicio_bbdd }} http://localhost:8080/ords_{{ servicio_bbdd }}
+              
+              ProxyPass /i_{{ servicio_bbdd }} http://localhost:8080/i_{{ servicio_bbdd }}
+              ProxyPassReverse /i_{{ servicio_bbdd }} http://localhost:8080/i_{{ servicio_bbdd }}
+          
+              <Location "/webapps">
+                Order allow,deny
+                Allow from all
+              </Location>
+          </VirtualHost>
+
+    # =========================================================
+    # FASE 4: APLICAR CAMBIOS
+    # =========================================================
+    - name: 4.1 Habilitar y recargar Apache (HTTPD)
+      systemd:
+        name: httpd
+        enabled: yes
+        state: restarted
