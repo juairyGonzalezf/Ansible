@@ -4,12 +4,12 @@
   become: yes
   become_user: oracle
   tasks:
-    - name: Verificar que se han especificado los servidores a reiniciar
+    - name: Verificar que se han especificado el servidores a comprobar
       fail:
         msg: >
-          ERROR: Debes especificar los servidores. 
+          ERROR: Debes especificar el servidores. 
           Ejemplo: ansible-playbook playbook_check_reinicios.yml -e "target=server3"
-      when: servidores == ""
+      when: target == ""
 
     - name: Aprovisionar script comprobar_reinicios.sh al servidor destino
       copy:
