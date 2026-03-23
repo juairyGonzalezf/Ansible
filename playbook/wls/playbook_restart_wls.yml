@@ -1,0 +1,31 @@
+---
+- name: Reiniciar servidores WebLogic en paralelo
+  hosts: "{{ target }}"
+  become: yes
+  become_user: oracle
+  vars:
+    # Esta variable la inyectaremos por linea de comandos
+    servidores: ""
+    
+  tasks:
+    - name: Verificar que se han especificado los servidores a reiniciar
+      fail:
+        msg: >
+          ERROR: Debes especificar los servidores. 
+          Ejemplo: ansible-playbook playbook_restart_wls.yml -e "target=server3 servidores='test1 test2'"
+      when: servidores == ""
+
+    - name: Aprovisionar script reiniciar.sh al servidor destino
+      copy:
+        src: /etc/ansible/playbook/wls/reiniciar.sh
+        dest: /disc2/scripts/reiniciar.sh
+        owner: oracle
+        mode: '0755'
+
+    - name: Ejecutar script de reinicio
+      command: "/disc2/scripts/reiniciar.sh {{ servidores }}"
+      register: resultado_reinicio
+
+    - name: Mostrar progreso y resultado
+      debug:
+        var: resultado_reinicio.stdout_lines

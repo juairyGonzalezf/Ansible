@@ -8,11 +8,11 @@ fi
 
 SERVIDORES=$(IFS=, ; echo "$*")
 
-ADMIN_URL="t3://su1168.corpo.ad.diba.es:7004"
-ADMIN_USER="wls_admin"
-ADMIN_PASS="WR;n1ZCeMe"
+ADMIN_URL="t3://server3:7004"
+ADMIN_USER="weblogic"
+ADMIN_PASS="Juanmanuel12.,|@"
 
-. /disc2/bea/INT-SAJ14/bin/setDomainEnv.sh
+. /disc2/bea/WLS_14_1/bin/setDomainEnv.sh
 
 echo "====================================================="
 echo " Preparando reinicio en PARALELO para: $SERVIDORES"

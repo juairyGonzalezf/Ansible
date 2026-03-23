@@ -1,18 +1,25 @@
 ---
 - name: Comprobar servidores WebLogic que necesitan reinicio
-  hosts: weblogic14_1_admin  # Cambia 'all' por tu grupo de inventario si lo necesitas (ej. weblogic_int)
+  hosts: "{{ target }}"  # Cambia 'all' por tu grupo de inventario si lo necesitas (ej. weblogic_int)
   become: yes
   become_user: oracle
   tasks:
+    - name: Verificar que se han especificado los servidores a reiniciar
+      fail:
+        msg: >
+          ERROR: Debes especificar los servidores. 
+          Ejemplo: ansible-playbook playbook_check_reinicios.yml -e "target=server3"
+      when: servidores == ""
+
     - name: Aprovisionar script comprobar_reinicios.sh al servidor destino
       copy:
         src: /etc/ansible/playbook/wls/comprobar_reinicios.sh
-        dest: /disc2/bea/WLS_14_1/bin/comprobar_reinicios.sh
+        dest: /disc2/scripts/comprobar_reinicios.sh
         owner: oracle
         mode: '0755'
 
     - name: Ejecutar script de comprobacion
-      command: /disc2/bea/SAJ14/bin/comprobar_reinicios.sh
+      command: /disc2/scripts/comprobar_reinicios.sh
       register: resultado_check
       changed_when: false # Evita que Ansible lo marque como "Changed" ya que solo es lectura
 

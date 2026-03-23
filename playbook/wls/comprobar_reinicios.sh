@@ -1,11 +1,11 @@
 #!/bin/bash
 
-ADMIN_URL="t3://su1168.corpo.ad.diba.es:7004"
-ADMIN_USER="wls_admin"
-ADMIN_PASS="WR;n1ZCeMe"
+ADMIN_URL="t3://server3.kratos150.local:7004"
+ADMIN_USER="weblogic"
+ADMIN_PASS="Juanmanuel12.,|@"
 
 # Cargar el entorno de WebLogic
-. /disc2/bea/INT-SAJ14/bin/setDomainEnv.sh > /dev/null 2>&1
+. /disc2/bea/WLS_14_1/bin/setDomainEnv.sh > /dev/null 2>&1
 
 echo "====================================================="
 echo " Consultando servidores que necesitan reinicio..."
