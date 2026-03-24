@@ -8,18 +8,18 @@
       fail:
         msg: >
           ERROR: Debes especificar el servidores. 
-          Ejemplo: ansible-playbook playbook_check_reinicios.yml -e "target=server3"
+          Ejemplo: ansible-playbook playbook_check_reinicios.yml -e 'target=server3'
       when: target == ""
 
-    - name: Aprovisionar script comprobar_reinicios.sh al servidor destino
+    - name: Aprovisionar script check_need_restart.sh al servidor destino
       copy:
-        src: /etc/ansible/playbook/wls/comprobar_reinicios.sh
-        dest: /disc2/scripts/comprobar_reinicios.sh
+        src: /etc/ansible/playbook/wls/check_need_restart.sh
+        dest: /disc2/scripts/check_need_restart.sh
         owner: oracle
         mode: '0755'
 
     - name: Ejecutar script de comprobacion
-      command: /disc2/scripts/comprobar_reinicios.sh
+      command: /disc2/scripts/check_need_restart.sh
       register: resultado_check
       changed_when: false # Evita que Ansible lo marque como "Changed" ya que solo es lectura
 

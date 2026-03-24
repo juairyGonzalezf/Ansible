@@ -143,3 +143,13 @@ Please make sure you have the correct access rights
 and the repository exists.
 error: cannot pull with rebase: You have unstaged changes.
 error: Please commit or stash them.
+[etc/ansible c1c4e2a] Auto-sync: 2026-03-23 16:00:01
+ 3 files changed, 67 insertions(+), 14 deletions(-)
+ rename playbook/wls/{playbook_check_reinicios.yml => playbook_check_restart.yml} (100%)
+fatal: 'server6' does not appear to be a git repository
+fatal: Could not read from remote repository.
+
+Please make sure you have the correct access rights
+and the repository exists.
+error: cannot pull with rebase: You have unstaged changes.
+error: Please commit or stash them.

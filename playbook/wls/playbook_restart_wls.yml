@@ -5,7 +5,7 @@
   become_user: oracle
   vars:
     servidores: ""
-    admin_service_name: "WLS_14_1.service" # Reemplaza por el nombre real de tu servicio
+    admin_service_name: "weblogic1411-admin.service" # Reemplaza por el nombre real de tu servicio
     
   tasks:
     - name: Verificar que se han especificado los servidores a reiniciar
@@ -33,7 +33,7 @@
 
         - name: Esperar a que el AdminServer este levantado (puerto 7004)
           wait_for:
-            host: "{{ inventory_hostname }}"  # <--- Anadimos esto
+            host: "{{ inventory_hostname }}" # <-- ¡Añadimos esta linea!
             port: 7004
             delay: 15
             timeout: 120
@@ -56,16 +56,16 @@
     # =========================================================================
     - name: Gestionar reinicio de Managed Servers
       block:
-        - name: Aprovisionar script reiniciar.sh al servidor destino
+        - name: Aprovisionar script restart.sh al servidor destino
           copy:
-            src: /etc/ansible/playbook/wls/reiniciar.sh
-            dest: /disc2/scripts/reiniciar.sh
+            src: /etc/ansible/playbook/wls/restart.sh
+            dest: /disc2/scripts/restart.sh
             owner: oracle
             mode: '0755'
 
         - name: Ejecutar script de reinicio para Managed Servers
           # Unimos la lista con espacios para pasarla como argumentos al .sh
-          command: "/disc2/scripts/reiniciar.sh {{ lista_managed | join(' ') }}"
+          command: "/disc2/scripts/restart.sh {{ lista_managed | join(' ') }}"
           register: resultado_reinicio
 
         - name: Mostrar progreso y resultado de los Managed Servers
