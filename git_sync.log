@@ -245,3 +245,14 @@ Please make sure you have the correct access rights
 and the repository exists.
 error: cannot pull with rebase: You have unstaged changes.
 error: Please commit or stash them.
+[etc/ansible 18623e1] Auto-sync: 2026-03-26 16:00:01
+ 3 files changed, 9 insertions(+)
+ rename playbook/{ => upgrade}/upgrade_8_to_9.yml (100%)
+ rename playbook/{ => upgrade}/upgrade_9_to_10.yml (100%)
+fatal: 'server6' does not appear to be a git repository
+fatal: Could not read from remote repository.
+
+Please make sure you have the correct access rights
+and the repository exists.
+error: cannot pull with rebase: You have unstaged changes.
+error: Please commit or stash them.
