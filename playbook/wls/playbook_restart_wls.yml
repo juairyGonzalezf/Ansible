@@ -6,13 +6,14 @@
   vars:
     servidores: ""
     admin_service_name: "weblogic1411-admin.service" # Reemplaza por el nombre real de tu servicio
+    node_manager_service_name: "weblogic-nodemanager.service" # <-- VARIABLE AÑADIDA
     
   tasks:
     - name: Verificar que se han especificado los servidores a reiniciar
       fail:
         msg: >
           ERROR: Debes especificar los servidores. 
-          Ejemplo: ansible-playbook playbook_restart_wls.yml -e "target=server3 servidores='AdminServer test1 test2'"
+          Ejemplo: ansible-playbook playbook_restart_wls.yml -e "target=server3 servidores='NodeManager AdminServer test1 test2'"
       when: servidores == ""
 
     - name: Setear lista general de servidores
@@ -20,8 +21,30 @@
         lista_servidores: "{{ servidores.split() }}"
 
     # =========================================================================
-    # BLOQUE 1: ADMINSERVER
-    # Se ejecuta SOLO si "AdminServer" está en la variable que pasaste
+    # BLOQUE 1: NODEMANAGER
+    # Se ejecuta SOLO si "NodeManager" está en la variable
+    # Es mejor reiniciarlo ANTES que el AdminServer
+    # =========================================================================
+    - name: Gestionar reinicio del NodeManager
+      block:
+        - name: Reiniciar servicio de Systemd del NodeManager
+          service:
+            name: "{{ node_manager_service_name }}"
+            state: restarted
+          become_user: root # Ejecutamos temporalmente como root
+
+        - name: Esperar a que el NodeManager este levantado (puerto 5556)
+          wait_for:
+            host: "{{ inventory_hostname }}" 
+            port: 5556 # <-- PUERTO CORRECTO DEL NODEMANAGER
+            delay: 10
+            timeout: 120
+            state: started
+      when: "'NodeManager' in lista_servidores"
+
+    # =========================================================================
+    # BLOQUE 2: ADMINSERVER
+    # Se ejecuta SOLO si "AdminServer" está en la variable
     # =========================================================================
     - name: Gestionar reinicio del AdminServer
       block:
@@ -33,25 +56,23 @@
 
         - name: Esperar a que el AdminServer este levantado (puerto 7004)
           wait_for:
-            host: "{{ inventory_hostname }}" # <-- ¡Añadimos esta linea!
+            host: "{{ inventory_hostname }}"
             port: 7004
             delay: 15
             timeout: 120
             state: started
-
       when: "'AdminServer' in lista_servidores"
 
-
     # =========================================================================
-    # PREPARACION BLOQUE 2: Extraer solo los Managed Servers
+    # PREPARACION BLOQUE 3: Extraer solo los Managed Servers
     # =========================================================================
-    - name: Crear lista solo con Managed Servers (sin el AdminServer)
+    - name: Crear lista solo con Managed Servers (sin AdminServer ni NodeManager)
       set_fact:
-        lista_managed: "{{ lista_servidores | reject('search', '^AdminServer$') | list }}"
-
+        # <-- EXPRESIÓN REGULAR ACTUALIZADA PARA IGNORAR AMBOS
+        lista_managed: "{{ lista_servidores | reject('search', '^(AdminServer|NodeManager)$') | list }}"
 
     # =========================================================================
-    # BLOQUE 2: MANAGED SERVERS
+    # BLOQUE 3: MANAGED SERVERS
     # Se ejecuta SOLO si la lista_managed NO está vacía
     # =========================================================================
     - name: Gestionar reinicio de Managed Servers

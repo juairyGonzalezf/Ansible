@@ -1,0 +1,140 @@
+---
+# Usamos un 'default' para que si no pasas target, no falle de golpe y muestre la ayuda
+- name: Arrancar servidores WebLogic
+  hosts: "{{ target | default('localhost') }}"
+  gather_facts: no 
+  become: yes
+  become_user: oracle
+  vars:
+    target: ""
+    servidores: ""
+    admin_service_name: "weblogic1411-admin.service"
+    node_manager_service_name: "weblogic-nodemanager.service"
+    
+    # --- VARIABLES DE WEBLOGIC PARA LA PLANTILLA (¡Ajusta a tu entorno!) ---
+    wls_user: "weblogic"
+    wls_pass: "Juanmanuel12.,|@" 
+    wls_domain_path: "/disc2/bea/WLS_14_1"
+    
+  tasks:
+    - name: Verificar que se han especificado los parametros requeridos
+      fail:
+        msg: |
+          ========================================================================
+          ERROR: Faltan parametros obligatorios para ejecutar el Playbook.
+          
+          USO CORRECTO: 
+          ansible-playbook playbook_start_wls.yml -e "target=<host> servidores='<lista>'"
+          
+          OPCIONES PARA 'servidores':
+            - 'NodeManager'       : Arranca el Node Manager
+            - 'AdminServer'       : Arranca el Admin Server
+            - 'server1 server2'   : Arranca Managed Servers especificos
+            - 'all'               : Arranca TODOS los Managed Servers
+            
+          EJEMPLOS:
+            Arrancar todo:        -e "target=server3 servidores='NodeManager AdminServer all'"
+            Arrancar un managed:  -e "target=server3 servidores='app_server1'"
+          ========================================================================
+      when: target == "" or target == "localhost" or servidores == ""
+
+    - name: Setear lista general de servidores
+      set_fact:
+        lista_servidores: "{{ servidores.split() }}"
+
+    # =========================================================================
+    # PRE-COMPROBACIÓN: ¿Existen los servicios en esta máquina?
+    # =========================================================================
+    - name: Comprobar si existe el servicio del NodeManager en este host
+      command: "systemctl cat {{ node_manager_service_name }}"
+      register: check_nm
+      failed_when: false
+      changed_when: false
+      become_user: root # Lo ejecutamos como root para evitar problemas de permisos
+
+    - name: Comprobar si existe el servicio del AdminServer en este host
+      command: "systemctl cat {{ admin_service_name }}"
+      register: check_admin
+      failed_when: false
+      changed_when: false
+      become_user: root
+
+    # =========================================================================
+    # BLOQUE 1: NODEMANAGER
+    # =========================================================================
+    - name: Gestionar arranque del NodeManager
+      block:
+        - name: Iniciar servicio de Systemd del NodeManager
+          service:
+            name: "{{ node_manager_service_name }}"
+            state: started
+          become_user: root
+
+        - name: Esperar a que el NodeManager este totalmente iniciado (puerto 5556)
+          wait_for:
+            host: "{{ inventory_hostname }}"
+            port: 5556
+            delay: 5
+            timeout: 120
+            state: started
+            
+      # SOLUCIÓN: Solo arranca si has pedido 'NodeManager' Y además el servicio existe (rc == 0)
+      when: "'NodeManager' in lista_servidores and check_nm.rc == 0"
+
+    # =========================================================================
+    # BLOQUE 2: ADMINSERVER
+    # =========================================================================
+    - name: Gestionar arranque del AdminServer
+      block:
+        - name: Iniciar servicio de Systemd del AdminServer
+          service:
+            name: "{{ admin_service_name }}"
+            state: started
+          become_user: root
+
+        - name: Esperar a que el AdminServer este totalmente iniciado (puerto 7004)
+          wait_for:
+            host: "{{ inventory_hostname }}"
+            port: 7004
+            delay: 10
+            timeout: 300 
+            state: started 
+            
+      # SOLUCIÓN: Solo arranca si has pedido 'AdminServer' Y además el servicio existe
+      when: "'AdminServer' in lista_servidores and check_admin.rc == 0"
+
+    # =========================================================================
+    # PREPARACION: Extraer solo los Managed Servers (o la palabra 'all')
+    # =========================================================================
+    - name: Crear lista solo con Managed Servers (sin AdminServer ni NodeManager)
+      set_fact:
+        lista_managed: "{{ lista_servidores | reject('search', '^(AdminServer|NodeManager)$') | list }}"
+
+    # =========================================================================
+    # BLOQUE 3: MANAGED SERVERS
+    # =========================================================================
+    - name: Gestionar arranque de Managed Servers
+      block:
+        - name: Aprovisionar script start.sh al servidor destino (Template)
+          template:
+            src: /etc/ansible/playbook/wls/start.sh
+            dest: /disc2/scripts/start.sh
+            owner: oracle
+            group: oracle
+            mode: '0755'
+
+        - name: Ejecutar script de arranque para Managed Servers
+          command: "/disc2/scripts/start.sh {{ lista_managed | join(' ') }}"
+          register: resultado_arranque
+          async: 600 
+          poll: 10
+
+        - name: Mostrar resumen del arranque (Stdout y Stderr)
+          debug:
+            msg: 
+              - "=== SALIDA NORMAL ==="
+              - "{{ resultado_arranque.stdout_lines | default([]) }}"
+              - "=== POSIBLES ERRORES ==="
+              - "{{ resultado_arranque.stderr_lines | default([]) }}"
+            
+      when: lista_managed | length > 0

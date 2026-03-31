@@ -1,0 +1,140 @@
+---
+# Usamos un 'default' para que si no pasas target, no falle de golpe y muestre la ayuda
+- name: Detener servidores WebLogic
+  hosts: "{{ target | default('localhost') }}"
+  gather_facts: no 
+  become: yes
+  become_user: oracle
+  vars:
+    target: ""
+    servidores: ""
+    admin_service_name: "weblogic1411-admin.service"
+    node_manager_service_name: "weblogic-nodemanager.service"
+    
+    # --- VARIABLES DE WEBLOGIC PARA LA PLANTILLA (¡Ajusta a tu entorno!) ---
+    wls_user: "weblogic"
+    wls_pass: "Juanmanuel12.,|@" 
+    wls_domain_path: "/disc2/bea/WLS_14_1"
+    
+  tasks:
+    - name: Verificar que se han especificado los parametros requeridos
+      fail:
+        msg: |
+          ========================================================================
+          ERROR: Faltan parametros obligatorios para ejecutar el Playbook.
+          
+          USO CORRECTO: 
+          ansible-playbook playbook_stop_wls.yml -e "target=<host> servidores='<lista>'"
+          
+          OPCIONES PARA 'servidores':
+            - 'AdminServer'       : Detiene el Admin Server
+            - 'NodeManager'       : Detiene el Node Manager
+            - 'server1 server2'   : Detiene Managed Servers especificos
+            - 'all'               : Detiene TODOS los Managed Servers
+            
+          EJEMPLOS:
+            Parar todo:        -e "target=server3,server4 servidores='all AdminServer NodeManager'"
+            Parar un managed:  -e "target=server3 servidores='app_server1'"
+          ========================================================================
+      when: target == "" or target == "localhost" or servidores == ""
+
+    - name: Setear lista general de servidores
+      set_fact:
+        lista_servidores: "{{ servidores.split() }}"
+
+    # =========================================================================
+    # PRE-COMPROBACIÓN: ¿Existen los servicios en esta máquina?
+    # =========================================================================
+    - name: Comprobar si existe el servicio del NodeManager en este host
+      command: "systemctl cat {{ node_manager_service_name }}"
+      register: check_nm
+      failed_when: false
+      changed_when: false
+      become_user: root
+
+    - name: Comprobar si existe el servicio del AdminServer en este host
+      command: "systemctl cat {{ admin_service_name }}"
+      register: check_admin
+      failed_when: false
+      changed_when: false
+      become_user: root
+
+    # =========================================================================
+    # PREPARACION: Extraer solo los Managed Servers (o la palabra 'all')
+    # =========================================================================
+    - name: Crear lista solo con Managed Servers (sin AdminServer ni NodeManager)
+      set_fact:
+        lista_managed: "{{ lista_servidores | reject('search', '^(AdminServer|NodeManager)$') | list }}"
+
+    # =========================================================================
+    # BLOQUE 1: MANAGED SERVERS (Se detienen PRIMERO)
+    # =========================================================================
+    - name: Gestionar parada de Managed Servers
+      block:
+        - name: Aprovisionar script stop.sh al servidor destino (Template)
+          template:
+            src: /etc/ansible/playbook/wls/stop.sh
+            dest: /disc2/scripts/stop.sh
+            owner: oracle
+            group: oracle
+            mode: '0755'
+
+        - name: Ejecutar script de parada para Managed Servers
+          command: "/disc2/scripts/stop.sh {{ lista_managed | join(' ') }}"
+          register: resultado_parada
+          async: 600 
+          poll: 10
+
+        - name: Mostrar resumen del apagado (Stdout y Stderr)
+          debug:
+            msg: 
+              - "=== SALIDA NORMAL ==="
+              - "{{ resultado_parada.stdout_lines | default([]) }}"
+              - "=== POSIBLES ERRORES ==="
+              - "{{ resultado_parada.stderr_lines | default([]) }}"
+            
+      when: lista_managed | length > 0
+
+    # =========================================================================
+    # BLOQUE 2: ADMINSERVER (Se detiene SEGUNDO)
+    # =========================================================================
+    - name: Gestionar parada del AdminServer
+      block:
+        - name: Detener servicio de Systemd del AdminServer
+          service:
+            name: "{{ admin_service_name }}"
+            state: stopped
+          become_user: root
+
+        - name: Esperar a que el AdminServer este totalmente detenido (puerto 7004)
+          wait_for:
+            host: "{{ inventory_hostname }}"
+            port: 7004
+            delay: 5
+            timeout: 120
+            state: stopped 
+            
+      # SOLUCIÓN: Solo se apaga si se pidió Y si el servicio existe
+      when: "'AdminServer' in lista_servidores and check_admin.rc == 0"
+
+    # =========================================================================
+    # BLOQUE 3: NODEMANAGER (Se detiene AL FINAL)
+    # =========================================================================
+    - name: Gestionar parada del NodeManager
+      block:
+        - name: Detener servicio de Systemd del NodeManager
+          service:
+            name: "{{ node_manager_service_name }}"
+            state: stopped
+          become_user: root
+
+        - name: Esperar a que el NodeManager este totalmente detenido (puerto 5556)
+          wait_for:
+            host: "{{ inventory_hostname }}"
+            port: 5556
+            delay: 5
+            timeout: 120
+            state: stopped
+            
+      # SOLUCIÓN: Solo se apaga si se pidió Y si el servicio existe
+      when: "'NodeManager' in lista_servidores and check_nm.rc == 0"
