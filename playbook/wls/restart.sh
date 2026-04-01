@@ -1,132 +1,69 @@
 #!/bin/bash
 # Script para reiniciar Managed Servers de WebLogic autogenerado por Ansible
 
-SERVERS="$*"
+SERVERS=$@
 USER="{{ wls_user }}"
 PASS="{{ wls_pass }}"
 ADMIN_URL="t3://{{ inventory_hostname }}:7004"
 DOMAIN_PATH="{{ wls_domain_path }}"
 
 if [ -z "$1" ]; then
-  echo "Error: Indica los servidores o 'all'"
-  exit 1
+    echo "Error: Indica los servidores o 'all'"
+    exit 1
 fi
 
-. $DOMAIN_PATH/bin/setDomainEnv.sh
+WLST_SCRIPT="/tmp/restart_servers.py"
 
-echo "====================================================="
-echo " Preparando reinicio para: $SERVERS"
-echo "====================================================="
+echo "connect('$USER','$PASS','$ADMIN_URL')" > $WLST_SCRIPT
 
-TMP_SCRIPT="/tmp/wlst_restart_parallel_$$.py"
-
-cat <<EOF > "$TMP_SCRIPT"
-import java.lang.Thread as Thread
-
-try:
-    print "Conectando al AdminServer..."
-    connect('$USER', '$PASS', '$ADMIN_URL')
+if [ "$1" == "all" ]; then
+    echo "print '--- REINICIANDO TODOS LOS MANAGED SERVERS ---'" >> $WLST_SCRIPT
+    echo "server_list = cmo.getServers()" >> $WLST_SCRIPT
     
-    lista_limpia = []
+    # FASE 1: PARADA
+    echo "for server in server_list:" >> $WLST_SCRIPT
+    echo "    name = server.getName()" >> $WLST_SCRIPT
+    echo "    if name != 'AdminServer':" >> $WLST_SCRIPT
+    echo "        print 'Intentando parar server: ' + name" >> $WLST_SCRIPT
+    echo "        try:" >> $WLST_SCRIPT
+    echo "            shutdown(name, 'Server', ignoreSessions='true', force='true')" >> $WLST_SCRIPT
+    echo "        except:" >> $WLST_SCRIPT
+    echo "            print ' --> AVISO: ' + name + ' ya estaba parado o fallo al detenerse.'" >> $WLST_SCRIPT
     
-    # --- LOGICA PARA LA PALABRA 'all' ---
-    if "$1" == "all":
-        print "--- Detectado parametro 'all'. Obteniendo todos los Managed Servers ---"
-        server_list = cmo.getServers()
-        for server in server_list:
-            name = server.getName()
-            if name != 'AdminServer':
-                lista_limpia.append(name)
-    else:
-        lista_argumentos = "$SERVERS".split()
-        for srv in lista_argumentos:
-            lista_limpia.append(srv.strip())
+    # FASE 2: ARRANQUE
+    echo "for server in server_list:" >> $WLST_SCRIPT
+    echo "    name = server.getName()" >> $WLST_SCRIPT
+    echo "    if name != 'AdminServer':" >> $WLST_SCRIPT
+    echo "        print 'Intentando arrancar server: ' + name" >> $WLST_SCRIPT
+    echo "        try:" >> $WLST_SCRIPT
+    echo "            start(name, 'Server')" >> $WLST_SCRIPT
+    echo "        except:" >> $WLST_SCRIPT
+    echo "            print ' --> AVISO: ' + name + ' ya estaba arrancado o fallo al iniciar.'" >> $WLST_SCRIPT
+else
+    # FASE 1: PARADA
+    for server in $SERVERS; do
+        echo "print 'Intentando parar server: $server'" >> $WLST_SCRIPT
+        echo "try:" >> $WLST_SCRIPT
+        echo "    shutdown('$server', 'Server', ignoreSessions='true', force='true')" >> $WLST_SCRIPT
+        echo "except:" >> $WLST_SCRIPT
+        echo "    print ' --> AVISO: $server ya estaba parado o fallo al detenerse.'" >> $WLST_SCRIPT
+    done
     
-    print "\n=== FASE 1: APAGANDO SERVIDORES ==="
-    for srv in lista_limpia:
-        try:
-            print ">> Enviando orden de apagado a " + srv + "..."
-            # Quitamos block='false' para evitar errores de sintaxis en el shutdown
-            shutdown(srv, 'Server', ignoreSessions='true', force='true')
-        except Exception, e:
-            print " --> ERROR o AVISO al intentar apagar " + srv + ":"
-            print e
+    # FASE 2: ARRANQUE
+    for server in $SERVERS; do
+        echo "print 'Intentando arrancar server: $server'" >> $WLST_SCRIPT
+        echo "try:" >> $WLST_SCRIPT
+        echo "    start('$server', 'Server')" >> $WLST_SCRIPT
+        echo "except:" >> $WLST_SCRIPT
+        echo "    print ' --> AVISO: $server ya estaba arrancado o fallo al iniciar.'" >> $WLST_SCRIPT
+    done
+fi
 
-    print "\n>> Esperando a que todos se detengan por completo..."
-    domainRuntime()
-    for srv in lista_limpia:
-        estado = ""
-        intentos = 0
-        # Timeout de 40 intentos * 3s = 120 segundos maximo
-        while estado != "SHUTDOWN" and estado != "UNKNOWN" and intentos < 40:
-            try:
-                slcr = getMBean('/ServerLifeCycleRuntimes/' + srv)
-                if slcr != None:
-                    estado = slcr.getState()
-                else:
-                    estado = "UNKNOWN"
-            except:
-                estado = "UNKNOWN"
-                
-            if estado != "SHUTDOWN" and estado != "UNKNOWN":
-                intentos += 1
-                Thread.sleep(3000)
-                
-        if estado == "SHUTDOWN" or estado == "UNKNOWN":
-            print ">> [OK] " + srv + " esta SHUTDOWN."
-        else:
-            print ">> [ADVERTENCIA] Timeout esperando la parada de " + srv
+echo "disconnect()" >> $WLST_SCRIPT
+echo "exit()" >> $WLST_SCRIPT
 
-    print "\n=== FASE 2: ARRANCANDO EN PARALELO ==="
-    domainConfig()
-    for srv in lista_limpia:
-        try:
-            print ">> Enviando orden de arranque asincrono a " + srv + "..."
-            start(srv, 'Server', block='false')
-        except Exception, e:
-            print ">> Error al intentar arrancar " + srv + ":"
-            print e
+# Ejecutar WLST
+source $DOMAIN_PATH/bin/setDomainEnv.sh
+java weblogic.WLST $WLST_SCRIPT
 
-    print "\n>> Esperando a que todos esten listos..."
-    domainRuntime()
-    for srv in lista_limpia:
-        estado = ""
-        intentos = 0
-        # Timeout de 60 intentos * 3s = 180 segundos maximo
-        while estado != "RUNNING" and intentos < 60:
-            try:
-                slcr = getMBean('/ServerLifeCycleRuntimes/' + srv)
-                if slcr != None:
-                    estado = slcr.getState()
-                else:
-                    estado = "UNKNOWN"
-            except:
-                estado = "UNKNOWN"
-                
-            if estado != "RUNNING":
-                if estado == "FAILED_NOT_RESTARTABLE" or estado == "ADMIN":
-                    print ">> [ADVERTENCIA] " + srv + " se ha quedado en estado " + estado
-                    break
-                intentos += 1
-                Thread.sleep(3000)
-                
-        if estado == "RUNNING":
-            print ">> [OK] " + srv + " esta RUNNING."
-        elif estado != "FAILED_NOT_RESTARTABLE" and estado != "ADMIN":
-            print ">> [ADVERTENCIA] Timeout esperando el arranque de " + srv
-
-    print "\n====================================================="
-    print " Reinicio completado."
-    print "====================================================="
-    disconnect()
-    exit()
-    
-except Exception, e:
-    print "Se ha producido un error grave en WLST:"
-    print e
-    disconnect()
-    exit()
-EOF
-
-java weblogic.WLST "$TMP_SCRIPT"
-rm -f "$TMP_SCRIPT"
+rm -f $WLST_SCRIPT
