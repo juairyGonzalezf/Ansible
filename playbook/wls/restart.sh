@@ -15,7 +15,7 @@ fi
 . $DOMAIN_PATH/bin/setDomainEnv.sh
 
 echo "====================================================="
-echo " Preparando reinicio en PARALELO para: $SERVERS"
+echo " Preparando reinicio para: $SERVERS"
 echo "====================================================="
 
 TMP_SCRIPT="/tmp/wlst_restart_parallel_$$.py"
@@ -38,25 +38,27 @@ try:
             if name != 'AdminServer':
                 lista_limpia.append(name)
     else:
-        # Si no es all, usamos los argumentos separados por espacios que manda Ansible
         lista_argumentos = "$SERVERS".split()
         for srv in lista_argumentos:
             lista_limpia.append(srv.strip())
     
-    print "\n=== FASE 1: APAGANDO EN PARALELO ==="
+    print "\n=== FASE 1: APAGANDO SERVIDORES ==="
     for srv in lista_limpia:
         try:
             print ">> Enviando orden de apagado a " + srv + "..."
-            shutdown(srv, 'Server', ignoreSessions='true', force='true', block='false')
+            # Quitamos block='false' para evitar errores de sintaxis en el shutdown
+            shutdown(srv, 'Server', ignoreSessions='true', force='true')
         except Exception, e:
-            print " --> AVISO: " + srv + " ya estaba parado o fallo al detenerse."
+            print " --> ERROR o AVISO al intentar apagar " + srv + ":"
+            print e
 
     print "\n>> Esperando a que todos se detengan por completo..."
-    
     domainRuntime()
     for srv in lista_limpia:
         estado = ""
-        while estado != "SHUTDOWN" and estado != "UNKNOWN":
+        intentos = 0
+        # Timeout de 40 intentos * 3s = 120 segundos maximo
+        while estado != "SHUTDOWN" and estado != "UNKNOWN" and intentos < 40:
             try:
                 slcr = getMBean('/ServerLifeCycleRuntimes/' + srv)
                 if slcr != None:
@@ -67,25 +69,31 @@ try:
                 estado = "UNKNOWN"
                 
             if estado != "SHUTDOWN" and estado != "UNKNOWN":
+                intentos += 1
                 Thread.sleep(3000)
-        print ">> [OK] " + srv + " esta SHUTDOWN."
+                
+        if estado == "SHUTDOWN" or estado == "UNKNOWN":
+            print ">> [OK] " + srv + " esta SHUTDOWN."
+        else:
+            print ">> [ADVERTENCIA] Timeout esperando la parada de " + srv
 
     print "\n=== FASE 2: ARRANCANDO EN PARALELO ==="
-    
     domainConfig()
     for srv in lista_limpia:
         try:
-            print ">> Enviando orden de arranque a " + srv + "..."
+            print ">> Enviando orden de arranque asincrono a " + srv + "..."
             start(srv, 'Server', block='false')
         except Exception, e:
-            print ">> Error al intentar arrancar " + srv
+            print ">> Error al intentar arrancar " + srv + ":"
+            print e
 
     print "\n>> Esperando a que todos esten listos..."
-    
     domainRuntime()
     for srv in lista_limpia:
         estado = ""
-        while estado != "RUNNING":
+        intentos = 0
+        # Timeout de 60 intentos * 3s = 180 segundos maximo
+        while estado != "RUNNING" and intentos < 60:
             try:
                 slcr = getMBean('/ServerLifeCycleRuntimes/' + srv)
                 if slcr != None:
@@ -99,19 +107,22 @@ try:
                 if estado == "FAILED_NOT_RESTARTABLE" or estado == "ADMIN":
                     print ">> [ADVERTENCIA] " + srv + " se ha quedado en estado " + estado
                     break
+                intentos += 1
                 Thread.sleep(3000)
+                
         if estado == "RUNNING":
             print ">> [OK] " + srv + " esta RUNNING."
+        elif estado != "FAILED_NOT_RESTARTABLE" and estado != "ADMIN":
+            print ">> [ADVERTENCIA] Timeout esperando el arranque de " + srv
 
     print "\n====================================================="
-    print " Reinicio asincrono completado con exito."
+    print " Reinicio completado."
     print "====================================================="
-    
     disconnect()
     exit()
     
 except Exception, e:
-    print "Se ha producido un error grave."
+    print "Se ha producido un error grave en WLST:"
     print e
     disconnect()
     exit()
