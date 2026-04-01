@@ -137,4 +137,4 @@
               - "=== POSIBLES ERRORES ==="
               - "{{ resultado_arranque.stderr_lines | default([]) }}"
             
-      when: lista_managed | length > 0
+      when: lista_managed | length > 0 and check_admin.rc == 0

@@ -1,29 +1,66 @@
 ---
+# Usamos un 'default' para que si no pasas target, no falle de golpe y muestre la ayuda
 - name: Reiniciar servidores WebLogic en paralelo
-  hosts: "{{ target }}"
+  hosts: "{{ target | default('localhost') }}"
+  gather_facts: no 
   become: yes
   become_user: oracle
   vars:
+    target: ""
     servidores: ""
-    admin_service_name: "weblogic1411-admin.service" # Reemplaza por el nombre real de tu servicio
-    node_manager_service_name: "weblogic-nodemanager.service" # <-- VARIABLE AÑADIDA
+    admin_service_name: "weblogic1411-admin.service"
+    node_manager_service_name: "weblogic-nodemanager.service"
+    
+    # --- VARIABLES DE WEBLOGIC PARA LA PLANTILLA (¡Ajusta a tu entorno!) ---
+    wls_user: "weblogic"
+    wls_pass: "Juanmanuel12.,|@" 
+    wls_domain_path: "/disc2/bea/WLS_14_1"
     
   tasks:
-    - name: Verificar que se han especificado los servidores a reiniciar
+    - name: Verificar que se han especificado los parametros requeridos
       fail:
-        msg: >
-          ERROR: Debes especificar los servidores. 
-          Ejemplo: ansible-playbook playbook_restart_wls.yml -e "target=server3 servidores='NodeManager AdminServer test1 test2'"
-      when: servidores == ""
+        msg: |
+          ========================================================================
+          ERROR: Faltan parametros obligatorios para ejecutar el Playbook.
+          
+          USO CORRECTO: 
+          ansible-playbook playbook_restart_wls.yml -e "target=<host> servidores='<lista>'"
+          
+          OPCIONES PARA 'servidores':
+            - 'NodeManager'       : Reinicia el Node Manager
+            - 'AdminServer'       : Reinicia el Admin Server
+            - 'server1 server2'   : Reinicia Managed Servers especificos
+            - 'all'               : Reinicia TODOS los Managed Servers
+            
+          EJEMPLOS:
+            Reiniciar todo:        -e "target=server3,server4 servidores='all AdminServer NodeManager'"
+            Reiniciar un managed:  -e "target=server3 servidores='app_server1'"
+          ========================================================================
+      when: target == "" or target == "localhost" or servidores == ""
 
     - name: Setear lista general de servidores
       set_fact:
         lista_servidores: "{{ servidores.split() }}"
 
     # =========================================================================
+    # PRE-COMPROBACIÓN: ¿Existen los servicios en esta máquina?
+    # =========================================================================
+    - name: Comprobar si existe el servicio del NodeManager en este host
+      command: "systemctl cat {{ node_manager_service_name }}"
+      register: check_nm
+      failed_when: false
+      changed_when: false
+      become_user: root
+
+    - name: Comprobar si existe el servicio del AdminServer en este host
+      command: "systemctl cat {{ admin_service_name }}"
+      register: check_admin
+      failed_when: false
+      changed_when: false
+      become_user: root
+
+    # =========================================================================
     # BLOQUE 1: NODEMANAGER
-    # Se ejecuta SOLO si "NodeManager" está en la variable
-    # Es mejor reiniciarlo ANTES que el AdminServer
     # =========================================================================
     - name: Gestionar reinicio del NodeManager
       block:
@@ -31,20 +68,20 @@
           service:
             name: "{{ node_manager_service_name }}"
             state: restarted
-          become_user: root # Ejecutamos temporalmente como root
+          become_user: root
 
         - name: Esperar a que el NodeManager este levantado (puerto 5556)
           wait_for:
             host: "{{ inventory_hostname }}" 
-            port: 5556 # <-- PUERTO CORRECTO DEL NODEMANAGER
-            delay: 10
+            port: 5556
+            delay: 5
             timeout: 120
             state: started
-      when: "'NodeManager' in lista_servidores"
+            
+      when: "'NodeManager' in lista_servidores and check_nm.rc == 0"
 
     # =========================================================================
     # BLOQUE 2: ADMINSERVER
-    # Se ejecuta SOLO si "AdminServer" está en la variable
     # =========================================================================
     - name: Gestionar reinicio del AdminServer
       block:
@@ -52,45 +89,51 @@
           service:
             name: "{{ admin_service_name }}"
             state: restarted
-          become_user: root # Ejecutamos temporalmente como root
+          become_user: root
 
         - name: Esperar a que el AdminServer este levantado (puerto 7004)
           wait_for:
             host: "{{ inventory_hostname }}"
             port: 7004
-            delay: 15
-            timeout: 120
+            delay: 10
+            timeout: 300
             state: started
-      when: "'AdminServer' in lista_servidores"
+            
+      when: "'AdminServer' in lista_servidores and check_admin.rc == 0"
 
     # =========================================================================
     # PREPARACION BLOQUE 3: Extraer solo los Managed Servers
     # =========================================================================
     - name: Crear lista solo con Managed Servers (sin AdminServer ni NodeManager)
       set_fact:
-        # <-- EXPRESIÓN REGULAR ACTUALIZADA PARA IGNORAR AMBOS
         lista_managed: "{{ lista_servidores | reject('search', '^(AdminServer|NodeManager)$') | list }}"
 
     # =========================================================================
     # BLOQUE 3: MANAGED SERVERS
-    # Se ejecuta SOLO si la lista_managed NO está vacía
+    # IMPORTANTE: Esto SOLO se ejecuta desde la máquina que tiene el AdminServer
     # =========================================================================
-    - name: Gestionar reinicio de Managed Servers
+    - name: Gestionar reinicio de Managed Servers (Solo desde el nodo Admin)
       block:
-        - name: Aprovisionar script restart.sh al servidor destino
-          copy:
+        - name: Aprovisionar script restart.sh al servidor destino (Template)
+          template:
             src: /etc/ansible/playbook/wls/restart.sh
             dest: /disc2/scripts/restart.sh
             owner: oracle
+            group: oracle
             mode: '0755'
 
         - name: Ejecutar script de reinicio para Managed Servers
-          # Unimos la lista con espacios para pasarla como argumentos al .sh
           command: "/disc2/scripts/restart.sh {{ lista_managed | join(' ') }}"
           register: resultado_reinicio
+          async: 900 # Le damos 15 minutos de máximo por si hay muchos servidores
+          poll: 10
 
-        - name: Mostrar progreso y resultado de los Managed Servers
+        - name: Mostrar progreso y resultado de los Managed Servers (Stdout y Stderr)
           debug:
-            var: resultado_reinicio.stdout_lines
+            msg: 
+              - "=== SALIDA NORMAL ==="
+              - "{{ resultado_reinicio.stdout_lines | default([]) }}"
+              - "=== POSIBLES ERRORES ==="
+              - "{{ resultado_reinicio.stderr_lines | default([]) }}"
             
-      when: lista_managed | length > 0
+      when: lista_managed | length > 0 and check_admin.rc == 0

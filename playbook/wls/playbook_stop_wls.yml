@@ -93,7 +93,7 @@
               - "=== POSIBLES ERRORES ==="
               - "{{ resultado_parada.stderr_lines | default([]) }}"
             
-      when: lista_managed | length > 0
+      when: lista_managed | length > 0 and check_admin.rc == 0
 
     # =========================================================================
     # BLOQUE 2: ADMINSERVER (Se detiene SEGUNDO)

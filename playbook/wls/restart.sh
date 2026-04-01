@@ -1,21 +1,21 @@
 #!/bin/bash
+# Script para reiniciar Managed Servers de WebLogic autogenerado por Ansible
+
+SERVERS="$*"
+USER="{{ wls_user }}"
+PASS="{{ wls_pass }}"
+ADMIN_URL="t3://{{ inventory_hostname }}:7004"
+DOMAIN_PATH="{{ wls_domain_path }}"
 
 if [ -z "$1" ]; then
-  echo "Uso: $0 <Servidor1> [Servidor2] [Servidor3] ..."
-  echo "Ejemplo: $0 FAM1 PMT1 TEST"
+  echo "Error: Indica los servidores o 'all'"
   exit 1
 fi
 
-SERVIDORES=$(IFS=, ; echo "$*")
-
-ADMIN_URL="t3://server3:7004"
-ADMIN_USER="weblogic"
-ADMIN_PASS="Juanmanuel12.,|@"
-
-. /disc2/bea/WLS_14_1/bin/setDomainEnv.sh
+. $DOMAIN_PATH/bin/setDomainEnv.sh
 
 echo "====================================================="
-echo " Preparando reinicio en PARALELO para: $SERVIDORES"
+echo " Preparando reinicio en PARALELO para: $SERVERS"
 echo "====================================================="
 
 TMP_SCRIPT="/tmp/wlst_restart_parallel_$$.py"
@@ -25,12 +25,23 @@ import java.lang.Thread as Thread
 
 try:
     print "Conectando al AdminServer..."
-    connect('$ADMIN_USER', '$ADMIN_PASS', '$ADMIN_URL')
+    connect('$USER', '$PASS', '$ADMIN_URL')
     
-    lista_servidores = "$SERVIDORES".split(",")
     lista_limpia = []
-    for srv in lista_servidores:
-        lista_limpia.append(srv.strip())
+    
+    # --- LOGICA PARA LA PALABRA 'all' ---
+    if "$1" == "all":
+        print "--- Detectado parametro 'all'. Obteniendo todos los Managed Servers ---"
+        server_list = cmo.getServers()
+        for server in server_list:
+            name = server.getName()
+            if name != 'AdminServer':
+                lista_limpia.append(name)
+    else:
+        # Si no es all, usamos los argumentos separados por espacios que manda Ansible
+        lista_argumentos = "$SERVERS".split()
+        for srv in lista_argumentos:
+            lista_limpia.append(srv.strip())
     
     print "\n=== FASE 1: APAGANDO EN PARALELO ==="
     for srv in lista_limpia:
@@ -38,18 +49,15 @@ try:
             print ">> Enviando orden de apagado a " + srv + "..."
             shutdown(srv, 'Server', ignoreSessions='true', force='true', block='false')
         except Exception, e:
-            pass
+            print " --> AVISO: " + srv + " ya estaba parado o fallo al detenerse."
 
     print "\n>> Esperando a que todos se detengan por completo..."
     
-    # Pasamos al arbol de monitorizacion en tiempo real
     domainRuntime()
-    
     for srv in lista_limpia:
         estado = ""
         while estado != "SHUTDOWN" and estado != "UNKNOWN":
             try:
-                # Consultamos el estado real en silencio
                 slcr = getMBean('/ServerLifeCycleRuntimes/' + srv)
                 if slcr != None:
                     estado = slcr.getState()
@@ -64,9 +72,7 @@ try:
 
     print "\n=== FASE 2: ARRANCANDO EN PARALELO ==="
     
-    # Volvemos a la raiz para lanzar los arranques
     domainConfig()
-    
     for srv in lista_limpia:
         try:
             print ">> Enviando orden de arranque a " + srv + "..."
