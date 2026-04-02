@@ -17,9 +17,9 @@ fi
 
 # 4. Ahora que el directorio está "limpio", sincronizamos (Pull + Rebase)
 # Bajamos los cambios del remoto y aplicamos nuestros commits locales por encima
-git pull  etc/ansible --rebase
+git pull  Ansible etc/ansible --rebase
 
 # 5. Si hubo cambios locales, los subimos al servidor
 if [ "$CAMBIOS_LOCALES" = true ]; then
-    git push  etc/ansible
+    git push  Ansible etc/ansible
 fi
