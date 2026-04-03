@@ -477,3 +477,9 @@ and the repository exists.
 From github.com:juairyGonzalezf/Ansible
  * branch            etc/ansible -> FETCH_HEAD
 Already up to date.
+[etc/ansible 1bd0359] Auto-sync: 2026-04-03 19:45:12
+ 1 file changed, 3 insertions(+)
+error: cannot pull with rebase: You have unstaged changes.
+error: Please commit or stash them.
+To github.com:juairyGonzalezf/Ansible.git
+   b0b471d..1bd0359  etc/ansible -> etc/ansible
