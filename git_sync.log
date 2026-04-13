@@ -561,3 +561,9 @@ error: cannot pull with rebase: You have unstaged changes.
 error: Please commit or stash them.
 To github.com:juairyGonzalezf/Ansible.git
    a51154e..04dc2ad  etc/ansible -> etc/ansible
+[etc/ansible f36bdbf] Auto-sync: 2026-04-09 18:21:34
+ 1 file changed, 6 insertions(+)
+error: cannot pull with rebase: You have unstaged changes.
+error: Please commit or stash them.
+To github.com:juairyGonzalezf/Ansible.git
+   04dc2ad..f36bdbf  etc/ansible -> etc/ansible
